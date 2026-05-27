@@ -1,0 +1,13 @@
+services:
+  codelens:
+    build: .
+    container_name: codelens-rag
+    ports:
+      - "8501:8501"
+    volumes:
+      - ./.codelens:/app/.codelens
+      - ./gymhero:/app/gymhero:ro
+      - ./results.json:/app/results.json
+    environment:
+      - HF_HUB_DISABLE_SYMLINKS_WARNING=1
+      - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false

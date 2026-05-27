@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+.codelens/
+.cache/
+.git/
+.gitignore
+results.json
+*.zip

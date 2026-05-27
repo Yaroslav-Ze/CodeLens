@@ -1,0 +1,104 @@
+<svg width="1200" height="760" viewBox="0 0 1200 760" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <marker id="arrow" markerWidth="12" markerHeight="12" refX="10" refY="6" orient="auto" markerUnits="strokeWidth">
+      <path d="M2,2 L10,6 L2,10 Z" fill="#334155" />
+    </marker>
+    <filter id="shadow" x="-10%" y="-10%" width="120%" height="120%">
+      <feDropShadow dx="0" dy="4" stdDeviation="5" flood-color="#0f172a" flood-opacity="0.16"/>
+    </filter>
+    <style>
+      .title { font: 700 30px Arial, sans-serif; fill: #0f172a; }
+      .subtitle { font: 400 16px Arial, sans-serif; fill: #475569; }
+      .box-title { font: 700 18px Arial, sans-serif; fill: #0f172a; }
+      .box-text { font: 400 14px Arial, sans-serif; fill: #334155; }
+      .small { font: 400 13px Arial, sans-serif; fill: #475569; }
+      .arrow { stroke: #334155; stroke-width: 2.5; marker-end: url(#arrow); fill: none; }
+      .dash { stroke: #64748b; stroke-width: 2.2; stroke-dasharray: 7 7; marker-end: url(#arrow); fill: none; }
+      .lane { fill: #f8fafc; stroke: #e2e8f0; stroke-width: 1.5; rx: 24; }
+      .card { filter: url(#shadow); stroke-width: 1.5; rx: 18; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="760" fill="#ffffff"/>
+  <text x="60" y="52" class="title">Архитектура CodeLens RAG</text>
+  <text x="60" y="80" class="subtitle">Умный поиск по Python-кодовой базе: AST-чанкинг, ChromaDB, гибридный retrieval, reranking и генерация ответа</text>
+
+  <!-- Lanes -->
+  <rect x="40" y="115" width="520" height="585" class="lane"/>
+  <rect x="640" y="115" width="520" height="585" class="lane"/>
+  <text x="70" y="148" class="box-title">Этап индексирования</text>
+  <text x="670" y="148" class="box-title">Этап поиска и ответа</text>
+
+  <!-- Indexing boxes -->
+  <rect x="90" y="185" width="380" height="78" fill="#dbeafe" stroke="#60a5fa" class="card"/>
+  <text x="120" y="215" class="box-title">Python-кодовая база</text>
+  <text x="120" y="241" class="box-text">Файлы проекта gymhero/*.py</text>
+
+  <rect x="90" y="310" width="380" height="92" fill="#e0f2fe" stroke="#38bdf8" class="card"/>
+  <text x="120" y="342" class="box-title">AST-разбор кода</text>
+  <text x="120" y="368" class="box-text">Функции, классы и методы</text>
+  <text x="120" y="390" class="small">chunk_id = путь:имя:строка</text>
+
+  <rect x="90" y="450" width="380" height="92" fill="#dcfce7" stroke="#4ade80" class="card"/>
+  <text x="120" y="482" class="box-title">Эмбеддинги чанков</text>
+  <text x="120" y="508" class="box-text">sentence-transformers</text>
+  <text x="120" y="530" class="small">multilingual MiniLM, вектор 384</text>
+
+  <rect x="90" y="590" width="380" height="78" fill="#fef3c7" stroke="#fbbf24" class="card"/>
+  <text x="120" y="620" class="box-title">ChromaDB</text>
+  <text x="120" y="646" class="box-text">Векторы, код и метаданные</text>
+
+  <!-- Search boxes -->
+  <rect x="730" y="185" width="340" height="78" fill="#ede9fe" stroke="#a78bfa" class="card"/>
+  <text x="760" y="215" class="box-title">Запрос пользователя</text>
+  <text x="760" y="241" class="box-text">Русский или английский язык</text>
+
+  <rect x="730" y="300" width="340" height="78" fill="#fce7f3" stroke="#f472b6" class="card"/>
+  <text x="760" y="330" class="box-title">Расширение запроса</text>
+  <text x="760" y="356" class="box-text">RU/EN синонимы и доменные термины</text>
+
+  <rect x="655" y="430" width="250" height="92" fill="#e0f2fe" stroke="#38bdf8" class="card"/>
+  <text x="680" y="462" class="box-title">Семантический поиск</text>
+  <text x="680" y="488" class="box-text">Поиск похожих векторов</text>
+  <text x="680" y="510" class="small">ChromaDB cosine</text>
+
+  <rect x="925" y="430" width="220" height="92" fill="#ecfccb" stroke="#84cc16" class="card"/>
+  <text x="950" y="462" class="box-title">Лексический поиск</text>
+  <text x="950" y="488" class="box-text">BM25-like скоринг</text>
+  <text x="950" y="510" class="small">имена, пути, код</text>
+
+  <rect x="730" y="565" width="340" height="78" fill="#ffedd5" stroke="#fb923c" class="card"/>
+  <text x="760" y="595" class="box-title">Объединение и reranking</text>
+  <text x="760" y="621" class="box-text">Top-K релевантных фрагментов</text>
+
+  <rect x="730" y="675" width="340" height="58" fill="#f1f5f9" stroke="#94a3b8" class="card"/>
+  <text x="760" y="700" class="box-title">Ответ в Streamlit UI</text>
+  <text x="760" y="722" class="box-text">Код, релевантность, latency, summary</text>
+
+  <!-- Index arrows vertical centered between boxes, outside text -->
+  <path class="arrow" d="M280 263 L280 302"/>
+  <path class="arrow" d="M280 402 L280 442"/>
+  <path class="arrow" d="M280 542 L280 582"/>
+
+  <!-- Search arrows vertical -->
+  <path class="arrow" d="M900 263 L900 292"/>
+  <path class="arrow" d="M900 378 L820 422"/>
+  <path class="arrow" d="M900 378 L1025 422"/>
+  <path class="arrow" d="M780 522 L830 557"/>
+  <path class="arrow" d="M1035 522 L970 557"/>
+  <path class="arrow" d="M900 643 L900 667"/>
+
+  <!-- DB to semantic search, routed around blocks -->
+  <path class="dash" d="M470 629 C565 629, 585 500, 647 478"/>
+  <text x="500" y="612" class="small">индекс используется при поиске</text>
+
+  <!-- Footer metric boxes -->
+  <rect x="60" y="710" width="250" height="34" rx="17" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="78" y="732" class="small">Precision@5: 0.744</text>
+
+  <rect x="330" y="710" width="250" height="34" rx="17" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="348" y="732" class="small">Warm latency: ~25–35 ms</text>
+
+  <rect x="600" y="710" width="110" height="34" rx="17" fill="#f8fafc" stroke="#cbd5e1"/>
+  <text x="618" y="732" class="small">RU + EN</text>
+</svg>
