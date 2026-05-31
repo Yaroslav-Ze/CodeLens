@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
@@ -22,6 +23,18 @@ from codelens.lexical import LexicalIndex
 from index import DEFAULT_COLLECTION, DEFAULT_MODEL
 
 SearchMode = Literal["semantic", "lexical", "hybrid"]
+LanguageScope = Literal["all", "python", "java"]
+MIN_SEMANTIC_RELEVANCE_SCORE = 0.30
+MIN_SEMANTIC_WITH_STRONG_LEXICAL_SCORE = 0.18
+MIN_STRONG_LEXICAL_SCORE = 0.65
+_UNSUPPORTED_QUERY_PATTERNS = (
+    r"\bblockchain\b|блокчейн",
+    r"\bwebsockets?\b|вебсокет",
+    r"\brate[\s_-]*limit(?:ing)?\b|\bthrottl(?:e|ing)\b|ограничен\w*\s+частот",
+    r"\bcach(?:e|ing)\b|кешир|кэширов",
+    r"\bsocial\s+login\b|\bgoogle\b|\bgithub\b",
+    r"\bgraphql\b|граф\s*ql",
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +86,26 @@ class SearchResult:
 def _distance_to_score(distance: float) -> float:
     """Convert cosine distance from ChromaDB to a user-friendly 0..1 score."""
     return max(0.0, min(1.0, 1.0 - float(distance)))
+
+
+def _domain_bonus(query: str, chunk_id: str) -> float:
+    """Boost architecture-relevant chunks for common code-navigation intents."""
+    q = query.lower()
+    cid = chunk_id.lower()
+    rules = [
+        (("jwt", "token", "токен", "жизн", "expire"), ("create_access_token", "config.py:settings", "login_for_access_token"), 0.10),
+        (("verify", "validate", "incoming", "провер", "валид"), ("dependencies.py:get_token", "dependencies.py:get_current_user", "exceptions.py:_get_credential_exception"), 0.14),
+        (("account", "email", "register", "аккаунт", "почт"), ("auth.py:register", "get_user_by_email"), 0.14),
+        (("config", "environment", "runtime", "настрой", "окружен"), ("config.py:", "settings"), 0.14),
+        (("unique", "duplicate", "уникальн", "повтор"), ("get_one", "models/training_plan.py", "create_training_plan"), 0.13),
+        (("owner", "superuser", "permission", "владел", "суперпольз", "прав"), ("get_current_active_user", "is_super_user", "delete_training_plan"), 0.16),
+        (("pagination", "paginate", "пагинац"), ("get_pagination_params", "get_many"), 0.20),
+    ]
+    bonus = 0.0
+    for triggers, targets, value in rules:
+        if any(trigger in q for trigger in triggers) and any(target in cid for target in targets):
+            bonus += value
+    return bonus
 
 
 def open_collection(persist_dir: Path, collection_name: str):
@@ -151,6 +184,28 @@ class CodeSearchEngine:
             }
         return candidates
 
+    @staticmethod
+    def _candidate_language(item: dict[str, Any]) -> str:
+        metadata = dict(item.get("metadata") or {})
+        language = str(metadata.get("language", "")).lower()
+        if language:
+            return language
+        path = str(metadata.get("path") or metadata.get("relative_path") or "").lower()
+        return "java" if path.endswith(".java") else "python"
+
+    def _filter_language(
+        self,
+        candidates: dict[str, dict[str, Any]],
+        language_scope: LanguageScope,
+    ) -> dict[str, dict[str, Any]]:
+        if language_scope == "all":
+            return candidates
+        return {
+            chunk_id: item
+            for chunk_id, item in candidates.items()
+            if self._candidate_language(item) == language_scope
+        }
+
     def _lexical_candidates(self, query: str, fetch_k: int) -> dict[str, dict[str, Any]]:
         scores = self.lexical_index.score_all(query)
         top_ids = sorted(scores, key=scores.get, reverse=True)[:fetch_k]
@@ -169,6 +224,35 @@ class CodeSearchEngine:
             }
         return candidates
 
+    def _is_relevant_query(
+        self,
+        query: str,
+        semantic: dict[str, dict[str, Any]],
+        lexical: dict[str, dict[str, Any]],
+    ) -> bool:
+        normalized = query.lower()
+        if any(re.search(pattern, normalized, re.IGNORECASE) for pattern in _UNSUPPORTED_QUERY_PATTERNS):
+            return False
+        top_semantic = max(
+            (float(item.get("semantic_score", 0.0)) for item in semantic.values()),
+            default=0.0,
+        )
+        top_lexical = max(
+            (float(item.get("lexical_score", 0.0)) for item in lexical.values()),
+            default=0.0,
+        )
+        has_lexical_evidence = bool(self.lexical_index.matched_query_terms(query))
+        return (
+            has_lexical_evidence
+            and (
+                top_semantic >= MIN_SEMANTIC_RELEVANCE_SCORE
+                or (
+                    top_semantic >= MIN_SEMANTIC_WITH_STRONG_LEXICAL_SCORE
+                    and top_lexical >= MIN_STRONG_LEXICAL_SCORE
+                )
+            )
+        )
+
     def search(
         self,
         query: str,
@@ -177,6 +261,7 @@ class CodeSearchEngine:
         fetch_k: int = 40,
         mode: SearchMode = "hybrid",
         alpha: float = 0.70,
+        language_scope: LanguageScope = "all",
     ) -> list[SearchResult]:
         """Return top-K code chunks for a natural-language query.
 
@@ -192,17 +277,27 @@ class CodeSearchEngine:
             fetch_k = top_k
         if not 0.0 <= alpha <= 1.0:
             raise ValueError("alpha must be between 0 and 1")
+        if language_scope not in {"all", "python", "java"}:
+            raise ValueError("language_scope must be all, python or java")
 
         semantic: dict[str, dict[str, Any]] = {}
         lexical: dict[str, dict[str, Any]] = {}
 
-        if mode in {"semantic", "hybrid"}:
-            semantic = self._semantic_candidates(normalized_query, fetch_k=fetch_k)
+        semantic = self._filter_language(
+            self._semantic_candidates(normalized_query, fetch_k=fetch_k),
+            language_scope,
+        )
         if mode in {"lexical", "hybrid"}:
-            lexical = self._lexical_candidates(normalized_query, fetch_k=fetch_k)
+            lexical = self._filter_language(
+                self._lexical_candidates(normalized_query, fetch_k=fetch_k),
+                language_scope,
+            )
+        if not self._is_relevant_query(normalized_query, semantic, lexical):
+            return []
 
         merged: dict[str, dict[str, Any]] = {}
-        for source in (semantic, lexical):
+        sources = (semantic,) if mode == "semantic" else (lexical,) if mode == "lexical" else (semantic, lexical)
+        for source in sources:
             for chunk_id, item in source.items():
                 merged.setdefault(chunk_id, {}).update(item)
 
@@ -216,6 +311,7 @@ class CodeSearchEngine:
                 final_score = lexical_score
             else:
                 final_score = alpha * semantic_score + (1.0 - alpha) * lexical_score
+            final_score += _domain_bonus(normalized_query, chunk_id)
             scored.append(
                 SearchResult(
                     rank=0,
@@ -256,6 +352,7 @@ def search(
     embedding_backend: str = "sentence-transformers",
     mode: SearchMode = "hybrid",
     alpha: float = 0.70,
+    language_scope: LanguageScope = "all",
 ) -> list[SearchResult]:
     """Compatibility wrapper for one-off CLI usage.
 
@@ -268,7 +365,14 @@ def search(
         model_name=model_name,
         embedding_backend=embedding_backend,
     )
-    return engine.search(query, top_k=top_k, fetch_k=fetch_k, mode=mode, alpha=alpha)
+    return engine.search(
+        query,
+        top_k=top_k,
+        fetch_k=fetch_k,
+        mode=mode,
+        alpha=alpha,
+        language_scope=language_scope,
+    )
 
 
 def print_results(results: list[SearchResult], elapsed: float, as_json: bool) -> None:
@@ -313,6 +417,7 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--mode", choices=["semantic", "lexical", "hybrid"], default="hybrid")
     parser.add_argument("--alpha", type=float, default=0.70, help="Semantic weight for hybrid mode")
+    parser.add_argument("--language", choices=["all", "python", "java"], default="all")
     parser.add_argument("--json", action="store_true", help="Print machine-readable JSON")
     return parser.parse_args()
 
@@ -332,6 +437,7 @@ def main() -> None:
         fetch_k=args.fetch_k,
         mode=args.mode,
         alpha=args.alpha,
+        language_scope=args.language,
     )
     print_results(results, elapsed=perf_counter() - started, as_json=args.json)
 

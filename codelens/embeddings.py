@@ -11,9 +11,17 @@ import hashlib
 import math
 import re
 from dataclasses import dataclass
+from functools import lru_cache
 from typing import Iterable, Protocol
 
 import numpy as np
+
+
+@lru_cache(maxsize=4)
+def _load_sentence_transformer(model_name: str):
+    from sentence_transformers import SentenceTransformer
+
+    return SentenceTransformer(model_name)
 
 
 class Embedder(Protocol):
@@ -36,7 +44,7 @@ class SentenceTransformerEmbedder:
                 "sentence-transformers is not installed. Install requirements.txt "
                 "or use --embedding-backend hashing for smoke tests."
             ) from exc
-        self._model = SentenceTransformer(self.model_name)
+        self._model = _load_sentence_transformer(self.model_name)
         get_dim = getattr(self._model, "get_embedding_dimension", self._model.get_sentence_embedding_dimension)
         self.dimension = int(get_dim())
 

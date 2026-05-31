@@ -16,12 +16,22 @@ from typing import Iterable
 
 _TOKEN_RE = re.compile(r"[A-Za-zА-Яа-я0-9_]+", re.UNICODE)
 _CAMEL_RE = re.compile(r"(?<=[a-zа-я0-9])(?=[A-ZА-Я])")
+_QUERY_STOPWORDS = {
+    "a", "an", "and", "any", "are", "be", "does", "for", "from", "how", "if",
+    "in", "is", "of", "on", "or", "project", "that", "the", "there", "this",
+    "to", "use", "what", "when", "where", "with",
+    "в", "где", "для", "и", "из", "как", "какие", "какой", "к", "ли", "на",
+    "по", "при", "с", "что", "это",
+}
 
 # Compact bilingual vocabulary for the provided FastAPI training-project domain.
 # It is intentionally generic: no question ids and no hard-coded answer chunks.
 _SYNONYMS: dict[str, tuple[str, ...]] = {
     "токен": ("token", "jwt", "access", "oauth2"),
     "доступ": ("access", "token"),
+    "секрет": ("secret", "secret_key", "settings", "config"),
+    "ключ": ("key", "secret_key", "settings", "config"),
+    "подпис": ("sign", "encode", "algorithm", "secret_key"),
     "жизн": ("expire", "expires", "expiration", "minutes"),
     "пароль": ("password", "hash", "hashed", "verify", "bcrypt"),
     "пользователь": ("user", "current_user", "superuser"),
@@ -48,6 +58,13 @@ _SYNONYMS: dict[str, tuple[str, ...]] = {
     "владел": ("owner", "owned", "created_by"),
     "обязательн": ("required", "field", "schema", "pydantic"),
     "огранич": ("constraint", "enum", "validation", "field"),
+    "библиот": ("library", "catalog"),
+    "книг": ("book",),
+    "читател": ("reader", "loan"),
+    "выда": ("borrow", "loan"),
+    "возврат": ("return", "returned"),
+    "автор": ("author",),
+    "доступ": ("available", "access", "token"),
     "create": ("создать", "создание", "add", "insert", "register"),
     "delete": ("удалить", "remove"),
     "remove": ("удалить", "delete"),
@@ -80,7 +97,7 @@ def tokenize(text: str, *, expand: bool = False) -> list[str]:
         if len(token) > 5 and re.search(r"[а-я]", token):
             tokens.append(token[:6])
             tokens.append(token[:5])
-        if expand:
+        if expand and token not in _QUERY_STOPWORDS and len(token) >= 4:
             for key, values in _SYNONYMS.items():
                 if token == key or token.startswith(key) or key.startswith(token):
                     tokens.extend(values)
@@ -174,3 +191,11 @@ class LexicalIndex:
             return {}
         max_score = max(scores.values()) or 1.0
         return {chunk_id: value / max_score for chunk_id, value in scores.items()}
+
+    def matched_query_terms(self, query: str) -> set[str]:
+        """Return meaningful query terms that occur in the indexed code."""
+        return {
+            token
+            for token in tokenize(query, expand=True)
+            if token not in _QUERY_STOPWORDS and len(token) >= 3 and token in self._doc_freq
+        }
