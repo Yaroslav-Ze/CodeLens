@@ -22,4 +22,4 @@ COPY . .
 
 EXPOSE 8501
 
-CMD ["bash", "-lc", "if [ ! -d .codelens/chroma ] && [ -d gymhero ]; then python index.py gymhero; fi; streamlit run app.py"]
+CMD ["bash", "-lc", "if [ ! -d .codelens/chroma ] && [ -d gymhero ]; then python index.py gymhero; fi; if [ ! -d .codelens/java-demo ] && [ -d gymevil ]; then python index.py gymevil --persist-dir .codelens/java-demo; fi; streamlit run app.py"]

@@ -1,4 +1,4 @@
-"""Index a Python codebase into ChromaDB for CodeLens RAG.
+"""Index a Python or Java codebase into ChromaDB for CodeLens RAG.
 
 Usage:
     python index.py <repo_root> [--persist-dir .codelens/chroma]
@@ -46,7 +46,7 @@ def write_manifest(persist_dir: Path, chunks: list[CodeChunk], repo_root: Path, 
         "model_name": model_name,
         "chunk_count": len(chunks),
         "file_count": len({chunk.relative_path for chunk in chunks}),
-        "chunking_strategy": "AST classes, top-level functions and class methods",
+        "chunking_strategy": "Python AST and Java tree-sitter classes, functions and methods",
     }
     persist_dir.mkdir(parents=True, exist_ok=True)
     (persist_dir / "manifest.json").write_text(
@@ -66,7 +66,7 @@ def index(repo_root: Path, persist_dir: Path, collection_name: str, model_name: 
     started = perf_counter()
     chunks = extract_chunks(repo_root)
     if not chunks:
-        raise RuntimeError(f"No Python chunks found under {repo_root}")
+        raise RuntimeError(f"No supported Python or Java chunks found under {repo_root}")
 
     if reset and persist_dir.exists():
         shutil.rmtree(persist_dir)
@@ -98,6 +98,7 @@ def index(repo_root: Path, persist_dir: Path, collection_name: str, model_name: 
             {
                 "chunk_id": str(chunk.chunk_id),
                 "path": str(chunk.relative_path),
+                "language": str(chunk.language),
                 "name": str(chunk.name),
                 "kind": str(chunk.kind),
                 "start_line": int(chunk.start_line),
@@ -118,8 +119,8 @@ def index(repo_root: Path, persist_dir: Path, collection_name: str, model_name: 
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Index Python code into CodeLens vector storage")
-    parser.add_argument("repo_root", type=Path, help="Directory with Python files, e.g. gymhero/gymhero")
+    parser = argparse.ArgumentParser(description="Index Python or Java code into CodeLens vector storage")
+    parser.add_argument("repo_root", type=Path, help="Directory with Python or Java files, e.g. gymhero/gymhero")
     parser.add_argument("--persist-dir", type=Path, default=Path(".codelens/chroma"))
     parser.add_argument("--collection", default=DEFAULT_COLLECTION)
     parser.add_argument("--model", default=DEFAULT_MODEL)

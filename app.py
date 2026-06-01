@@ -22,10 +22,38 @@ import streamlit as st
 import streamlit.components.v1 as components
 
 from index import DEFAULT_COLLECTION, DEFAULT_MODEL
-from search import CodeSearchEngine, SearchMode
-from codelens.answering import generate_extractive_answer, generate_ollama_answer
+from search import CodeSearchEngine, LanguageScope, SearchMode
+from codelens.answering import (
+    generate_extractive_answer,
+    generate_no_results_answer,
+    generate_ollama_answer,
+    generate_ollama_no_results_answer,
+)
 
 DEFAULT_PERSIST_DIR = Path(".codelens/chroma")
+PROJECTS = {
+    "Gymhero (Python)": {
+        "persist_dir": ".codelens/chroma",
+        "language_scope": "python",
+        "benchmark_queries": None,
+    },
+    "Gymevil (Java)": {
+        "persist_dir": ".codelens/java-demo",
+        "language_scope": "java",
+        "benchmark_queries": [
+            "как выдаётся книга?",
+            "как вернуть книгу?",
+            "как найти доступные книги автора?",
+            "где записывается выдача книги читателю?",
+            "как добавить книгу в каталог?",
+        ],
+    },
+}
+
+
+def sync_project_language() -> None:
+    project = st.session_state.get("selected_project", "Gymhero (Python)")
+    st.session_state["language_scope"] = PROJECTS[project]["language_scope"]
 EXAMPLES_PATH = Path("sample_queries.txt")
 QUESTIONS_PATH = Path("eval_questions.json")
 RESULTS_PATH = Path("results.json")
@@ -47,13 +75,14 @@ st.markdown(
         .chunk-title {font-size:1.25rem; font-weight:700; margin-bottom:0.25rem;}
         .code-preview {border:1px solid rgba(127,127,127,.18); border-radius:12px; padding:14px; overflow:auto; max-height:420px; background:rgba(127,127,127,.055); font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; font-size:0.88rem; line-height:1.45; white-space:pre;}
         mark {background:#fff3a3; padding:0 2px; border-radius:3px;}
+        div[data-testid="stStatusWidget"] {display:none;}
     </style>
     """,
     unsafe_allow_html=True,
 )
 
 
-@st.cache_resource(show_spinner="Loading search engine...")
+@st.cache_resource(show_spinner=False)
 def get_engine(
     persist_dir: str,
     collection_name: str,
@@ -108,6 +137,31 @@ def run_evaluation() -> str:
     return completed.stdout
 
 
+def benchmark_search_latency(
+    persist_dir: str,
+    collection_name: str,
+    model_name: str,
+    embedding_backend: str,
+    mode: SearchMode,
+    alpha: float,
+    fetch_k: int,
+    language_scope: LanguageScope,
+    benchmark_queries: list[str] | None,
+) -> float:
+    """Measure ten warmed searches after one excluded warm-up request."""
+    engine = get_engine(persist_dir, collection_name, model_name, embedding_backend)
+    questions = benchmark_queries or [item["query"] for item in load_eval_questions() if item.get("query")]
+    if not questions:
+        raise RuntimeError("eval_questions.json не содержит запросов для benchmark.")
+    engine.search(questions[0], top_k=5, fetch_k=fetch_k, mode=mode, alpha=alpha, language_scope=language_scope)
+    timings_ms: list[float] = []
+    for query in (questions * 10)[:10]:
+        started = perf_counter()
+        engine.search(query, top_k=5, fetch_k=fetch_k, mode=mode, alpha=alpha, language_scope=language_scope)
+        timings_ms.append((perf_counter() - started) * 1000)
+    return sum(timings_ms) / len(timings_ms)
+
+
 def compute_precision() -> float | None:
     """Compute current Precision@5 from results.json without spawning a new process."""
     if not RESULTS_PATH.exists() or not QUESTIONS_PATH.exists():
@@ -133,7 +187,8 @@ def query_terms(query: str) -> list[str]:
         "with", "from", "into", "какой", "какая", "какие", "в", "на", "по", "ли", "и", "а", "to", "of", "a", "an",
     }
     words = re.findall(r"[A-Za-zА-Яа-я_][A-Za-zА-Яа-я_0-9-]{2,}", query.lower())
-    return sorted({w for w in words if w not in stopwords}, key=len, reverse=True)[:12]
+    display_terms = {"выда": "выдача"}
+    return sorted({display_terms.get(w, w) for w in words if w not in stopwords}, key=len, reverse=True)[:12]
 
 
 def highlight_text(text: str, terms: list[str]) -> str:
@@ -150,7 +205,7 @@ def copy_button(label: str, text: str, key: str) -> None:
     copied_label = json.dumps(T.get("copied", "Copied ✓")) if "T" in globals() else json.dumps("Copied ✓")
     components.html(
         f"""
-        <button id="{button_id}" style="border:1px solid #ddd;border-radius:8px;padding:6px 10px;background:transparent;cursor:pointer;">
+        <button id="{button_id}" style="border:1px solid #ddd;border-radius:8px;padding:6px 10px;background:transparent;color:#fafafa;cursor:pointer;">
             {html.escape(label)}
         </button>
         <script>
@@ -181,20 +236,30 @@ def render_result(result: Any, terms: list[str]) -> None:
         copy_button(T["copy_chunk_id"], result.chunk_id, f"id_{result.rank}")
         copy_button(T["copy_code"], result.code, f"code_{result.rank}")
 
-        highlighted_code = highlight_text(result.code, terms)
-        st.markdown(f"<div class='code-preview'>{highlighted_code}</div>", unsafe_allow_html=True)
-        with st.expander(T["plain_code"]):
-            st.code(result.code, language="python")
+        language = "java" if result.path.endswith(".java") else "python"
+        st.code(result.code, language=language)
 
 
-def render_metrics_panel(persist_dir: str, last_latency_ms: float | None = None) -> None:
+def render_metrics_panel(
+    persist_dir: str,
+    collection_name: str,
+    model_name: str,
+    embedding_backend: str,
+    mode: SearchMode,
+    alpha: float,
+    fetch_k: int,
+    language_scope: LanguageScope,
+    benchmark_queries: list[str] | None,
+) -> None:
     st.subheader(T["metrics_dashboard"])
     manifest = load_manifest(persist_dir)
     precision = compute_precision()
 
     c1, c2 = st.columns(2)
     c1.metric("Precision@5", "—" if precision is None else f"{precision:.3f}")
-    c2.metric(T["last_latency"], "—" if last_latency_ms is None else f"{last_latency_ms:.1f} ms")
+    warmed_latency_ms = st.session_state.get("warmed_latency_ms")
+    c2.metric(T["warmed_latency"], "—" if warmed_latency_ms is None else f"{warmed_latency_ms:.1f} ms")
+    st.caption(T["warmed_latency_caption"])
 
     c3, c4 = st.columns(2)
     c3.metric(T["chunks"], str(manifest.get("chunk_count", "—")))
@@ -220,7 +285,25 @@ def render_metrics_panel(persist_dir: str, last_latency_ms: float | None = None)
     if st.button(T["run_evaluation"], type="primary"):
         with st.spinner(T["running_evaluation"]):
             output = run_evaluation()
-        st.code(output, language="text")
+        st.session_state["evaluation_output"] = output
+        st.rerun()
+    if st.button(T["run_latency_benchmark"]):
+        with st.spinner(T["running_latency_benchmark"]):
+            st.session_state["warmed_latency_ms"] = benchmark_search_latency(
+                persist_dir,
+                collection_name,
+                model_name,
+                embedding_backend,
+                mode,
+                alpha,
+                fetch_k,
+                language_scope,
+                benchmark_queries,
+            )
+        st.rerun()
+    if output := st.session_state.get("evaluation_output"):
+        with st.expander(T["evaluation_output"]):
+            st.code(output, language="text")
 
 
 def add_to_history(query: str) -> None:
@@ -247,17 +330,20 @@ TEXT = {
         "demo_query": "Демо-запрос",
         "custom_query": "Свой запрос",
         "question": "Вопрос",
+        "loading_search_engine": "Загружаю поисковый движок...",
         "placeholder": "Например: как создаётся токен доступа и какой срок его жизни?",
         "search": "Искать",
         "generated_answer": "Сгенерированный ответ",
         "retrieved_chunks": "Найденные фрагменты кода",
         "settings": "Настройки",
+        "project": "Проект",
         "chromadb_dir": "Папка ChromaDB",
         "collection": "Коллекция",
         "embedding_model": "Модель эмбеддингов",
         "embedding_backend": "Backend эмбеддингов",
         "embedding_backend_help": "Используйте hashing только для smoke-тестов без transformer-модели.",
         "search_mode": "Режим поиска",
+        "language_scope": "Язык исходного кода",
         "semantic_weight": "Вес семантики в hybrid-режиме",
         "top_k": "Top-K",
         "fetch_k": "Кандидаты до reranking",
@@ -268,7 +354,8 @@ TEXT = {
         "query_history": "История запросов",
         "empty_history": "В этой сессии запросов пока нет.",
         "metrics_dashboard": "Панель метрик",
-        "last_latency": "Последняя задержка",
+        "warmed_latency": "Среднее время 1 поиска",
+        "warmed_latency_caption": "Среднее рассчитано по 10 запросам после одного исключённого прогревочного поиска.",
         "chunks": "Чанки",
         "files": "Файлы",
         "evaluation": "Оценка",
@@ -278,11 +365,15 @@ TEXT = {
         "questions": "Вопросы: **{total}** · RU: **{ru}** · EN: **{en}**",
         "run_evaluation": "Запустить оценку",
         "running_evaluation": "Запускаю evaluate.py --run-score...",
+        "run_latency_benchmark": "Измерить среднее время поиска",
+        "running_latency_benchmark": "Выполняю один прогревочный и 10 измеряемых поисков...",
+        "evaluation_output": "Вывод последней оценки",
         "tip": "Подсказка: первый запрос включает прогрев модели; следующие используют кэшированный engine.",
         "enter_query": "Введите запрос.",
         "build_index": "Сначала создайте индекс: `python index.py gymhero`",
         "found_results_short": "Найдено {n} результат(ов) за {latency:.1f} мс",
-        "generating_ollama": "Генерирую grounded-ответ через локальную Ollama...",
+        "generating_ollama": "Генерирую ответ через локальную Ollama...",
+        "no_relevant_results": "Релевантные фрагменты кода не найдены. Попробуйте уточнить вопрос.",
         "copy_chunk_id": "Копировать chunk_id",
         "copy_code": "Копировать код",
         "copy_answer": "Копировать ответ",
@@ -300,17 +391,20 @@ TEXT = {
         "demo_query": "Demo query",
         "custom_query": "Custom query",
         "question": "Question",
+        "loading_search_engine": "Loading search engine...",
         "placeholder": "Example: how is an access token created and what is its lifetime?",
         "search": "Search",
         "generated_answer": "Generated answer",
         "retrieved_chunks": "Retrieved code chunks",
         "settings": "Settings",
+        "project": "Project",
         "chromadb_dir": "ChromaDB directory",
         "collection": "Collection",
         "embedding_model": "Embedding model",
         "embedding_backend": "Embedding backend",
         "embedding_backend_help": "Use hashing only for smoke tests without the transformer model.",
         "search_mode": "Search mode",
+        "language_scope": "Source-code language",
         "semantic_weight": "Semantic weight in hybrid mode",
         "top_k": "Top-K",
         "fetch_k": "Candidates before reranking",
@@ -321,7 +415,8 @@ TEXT = {
         "query_history": "Query history",
         "empty_history": "No queries in this session yet.",
         "metrics_dashboard": "Metrics dashboard",
-        "last_latency": "Last latency",
+        "warmed_latency": "Mean time per search",
+        "warmed_latency_caption": "The mean is calculated over 10 searches after one excluded warm-up search.",
         "chunks": "Chunks",
         "files": "Files",
         "evaluation": "Evaluation",
@@ -331,11 +426,15 @@ TEXT = {
         "questions": "Questions: **{total}** · RU: **{ru}** · EN: **{en}**",
         "run_evaluation": "Run evaluation",
         "running_evaluation": "Running evaluate.py --run-score...",
+        "run_latency_benchmark": "Measure mean search latency",
+        "running_latency_benchmark": "Running one warm-up and 10 measured searches...",
+        "evaluation_output": "Latest evaluation output",
         "tip": "Tip: first request includes model warm-up; subsequent requests use cached engine.",
         "enter_query": "Enter a query first.",
         "build_index": "Build the index first: `python index.py gymhero`",
         "found_results_short": "Found {n} result(s) in {latency:.1f} ms",
-        "generating_ollama": "Generating grounded answer with local Ollama...",
+        "generating_ollama": "Generating an answer with local Ollama...",
+        "no_relevant_results": "No relevant code chunks were found. Try refining the question.",
         "copy_chunk_id": "Copy chunk_id",
         "copy_code": "Copy code",
         "copy_answer": "Copy generated answer",
@@ -347,6 +446,7 @@ TEXT = {
 }
 
 T = TEXT[LANG]
+answer_language = "en" if LANG == "English" else "ru"
 
 st.title("🫰 CodeLens RAG")
 st.caption(T["caption"])
@@ -363,12 +463,18 @@ st.markdown(
     unsafe_allow_html=True,
 )
 
-if "last_latency_ms" not in st.session_state:
-    st.session_state["last_latency_ms"] = None
-
 with st.sidebar:
     st.header(T["settings"])
-    persist_dir = st.text_input(T["chromadb_dir"], value=str(DEFAULT_PERSIST_DIR))
+    selected_project = st.selectbox(
+        T["project"],
+        options=list(PROJECTS),
+        key="selected_project",
+        on_change=sync_project_language,
+    )
+    project_config = PROJECTS[selected_project]
+    persist_dir = str(project_config["persist_dir"])
+    benchmark_queries = project_config["benchmark_queries"]
+    st.caption(f"{T['chromadb_dir']}: `{persist_dir}`")
     collection_name = st.text_input(T["collection"], value=DEFAULT_COLLECTION)
     model_name = st.text_input(T["embedding_model"], value=DEFAULT_MODEL)
     embedding_backend = st.selectbox(
@@ -378,6 +484,13 @@ with st.sidebar:
         help=T["embedding_backend_help"],
     )
     mode: SearchMode = st.selectbox(T["search_mode"], options=["hybrid", "semantic", "lexical"], index=0)  # type: ignore[assignment]
+    language_scope: LanguageScope = st.selectbox(
+        T["language_scope"],
+        options=["all", "python", "java"],
+        index={"all": 0, "python": 1, "java": 2}[str(project_config["language_scope"])],
+        key="language_scope",
+        format_func=lambda value: {"all": "Python + Java", "python": "Python", "java": "Java"}[value],
+    )  # type: ignore[assignment]
     alpha = st.slider(T["semantic_weight"], 0.0, 1.0, 0.70, 0.05)
     top_k = st.slider(T["top_k"], 1, 10, 5)
     fetch_k = st.slider(T["fetch_k"], 10, 100, 40, 5)
@@ -389,7 +502,11 @@ with st.sidebar:
         index=1,
         help=T["answer_help"],
     )
-    ollama_model = st.text_input(T["ollama_model"], value="mistral")
+    ollama_model = st.selectbox(
+        T["ollama_model"],
+        options=["qwen2.5:3b", "mistral:7b"],
+        index=0,
+    )
     ollama_host = st.text_input(T["ollama_host"], value="http://localhost:11434")
 
     st.divider()
@@ -402,7 +519,17 @@ with st.sidebar:
         st.caption(T["empty_history"])
 
     st.divider()
-    render_metrics_panel(persist_dir, st.session_state.get("last_latency_ms"))
+    render_metrics_panel(
+        persist_dir,
+        collection_name,
+        model_name,
+        embedding_backend,
+        mode,
+        alpha,
+        fetch_k,
+        language_scope,
+        benchmark_queries,
+    )
 
 examples = load_examples()
 selected_example = st.selectbox(T["demo_query"], options=[T["custom_query"]] + examples, index=0)
@@ -426,37 +553,72 @@ if run_search:
         st.stop()
 
     try:
-        engine = get_engine(persist_dir, collection_name, model_name, embedding_backend)
+        with st.spinner(T["loading_search_engine"]):
+            engine = get_engine(persist_dir, collection_name, model_name, embedding_backend)
     except Exception as exc:
         st.error(str(exc))
         st.info(T["build_index"])
         st.stop()
 
     started = perf_counter()
-    results = engine.search(query, top_k=top_k, fetch_k=fetch_k, mode=mode, alpha=alpha)
+    results = engine.search(
+        query,
+        top_k=top_k,
+        fetch_k=fetch_k,
+        mode=mode,
+        alpha=alpha,
+        language_scope=language_scope,
+    )
     latency_ms = (perf_counter() - started) * 1000
-    st.session_state["last_latency_ms"] = latency_ms
     add_to_history(query)
 
     terms = query_terms(query)
+    if not results:
+        st.warning(T["no_relevant_results"])
+        if answer_mode != "off":
+            st.subheader(T["generated_answer"])
+            if answer_mode == "ollama":
+                with st.spinner(T["generating_ollama"]):
+                    try:
+                        answer = generate_ollama_no_results_answer(
+                            query=query,
+                            model=ollama_model,
+                            host=ollama_host,
+                            response_language=answer_language,
+                        )
+                    except Exception as exc:
+                        st.warning(str(exc))
+                        answer = generate_no_results_answer(query, response_language=answer_language)
+            else:
+                answer = generate_no_results_answer(query, response_language=answer_language)
+            st.write(answer)
+            copy_button(T["copy_answer"], answer, "no_results_answer")
+        st.stop()
+
     st.success(T["found_results_short"].format(n=len(results), latency=latency_ms))
     st.markdown(" ".join(f"<span class='badge'>{html.escape(t)}</span>" for t in terms), unsafe_allow_html=True)
 
     if answer_mode != "off":
         st.subheader(T["generated_answer"])
         if answer_mode == "extractive":
-            answer = generate_extractive_answer(query, results)
+            answer = generate_extractive_answer(query, results, response_language=answer_language)
             st.markdown(highlight_text(answer, terms), unsafe_allow_html=True)
             copy_button(T["copy_answer"], answer, "answer")
         else:
             with st.spinner(T["generating_ollama"]):
                 try:
-                    answer = generate_ollama_answer(query=query, chunks=results, model=ollama_model, host=ollama_host)
+                    answer = generate_ollama_answer(
+                        query=query,
+                        chunks=results,
+                        model=ollama_model,
+                        host=ollama_host,
+                        response_language=answer_language,
+                    )
                     st.write(answer)
                     copy_button(T["copy_answer"], answer, "answer")
                 except Exception as exc:
                     st.warning(str(exc))
-                    answer = generate_extractive_answer(query, results)
+                    answer = generate_extractive_answer(query, results, response_language=answer_language)
                     st.markdown(highlight_text(answer, terms), unsafe_allow_html=True)
                     copy_button(T["copy_fallback_answer"], answer, "fallback_answer")
 
