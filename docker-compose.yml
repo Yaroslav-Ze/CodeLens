@@ -7,6 +7,7 @@ services:
     volumes:
       - ./.codelens:/app/.codelens
       - ./gymhero:/app/gymhero:ro
+      - ./gymevil:/app/gymevil:ro
       - ./results.json:/app/results.json
     environment:
       - HF_HUB_DISABLE_SYMLINKS_WARNING=1
