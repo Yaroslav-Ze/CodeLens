@@ -11,6 +11,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import subprocess
 import sys
@@ -507,7 +508,10 @@ with st.sidebar:
         options=["qwen2.5:3b", "mistral:7b"],
         index=0,
     )
-    ollama_host = st.text_input(T["ollama_host"], value="http://localhost:11434")
+    ollama_host = st.text_input(
+        T["ollama_host"],
+        value=os.getenv("CODELENS_OLLAMA_HOST", "http://localhost:11434"),
+    )
 
     st.divider()
     st.subheader(T["query_history"])
