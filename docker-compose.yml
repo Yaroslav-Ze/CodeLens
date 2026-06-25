@@ -4,11 +4,16 @@ services:
     container_name: codelens-rag
     ports:
       - "8501:8501"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     volumes:
       - ./.codelens:/app/.codelens
+      - ./.codelens/huggingface:/root/.cache/huggingface
       - ./gymhero:/app/gymhero:ro
       - ./gymevil:/app/gymevil:ro
       - ./results.json:/app/results.json
     environment:
       - HF_HUB_DISABLE_SYMLINKS_WARNING=1
+      - HF_HOME=/root/.cache/huggingface
       - STREAMLIT_BROWSER_GATHER_USAGE_STATS=false
+      - CODELENS_OLLAMA_HOST=http://host.docker.internal:11434

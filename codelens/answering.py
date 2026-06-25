@@ -14,11 +14,16 @@ from urllib import error, request
 
 
 OLLAMA_PROFILES = {
-    "mistral": {"timeout": 420, "num_ctx": 4096, "num_predict": 360},
-    "mistral:7b": {"timeout": 420, "num_ctx": 4096, "num_predict": 360},
-    "qwen2.5:3b": {"timeout": 180, "num_ctx": 4096, "num_predict": 300},
+    "mistral": {"timeout": 420, "num_ctx": 4096, "num_predict": 360, "keep_alive": "10m"},
+    "mistral:7b": {"timeout": 420, "num_ctx": 4096, "num_predict": 360, "keep_alive": "10m"},
+    "qwen2.5:3b": {"timeout": 180, "num_ctx": 4096, "num_predict": 300, "keep_alive": "30m"},
 }
-DEFAULT_OLLAMA_PROFILE = {"timeout": 300, "num_ctx": 4096, "num_predict": 220}
+DEFAULT_OLLAMA_PROFILE = {
+    "timeout": 300,
+    "num_ctx": 4096,
+    "num_predict": 220,
+    "keep_alive": "10m",
+}
 
 
 def build_evidence_context(query: str, chunks: list[Any], max_chars_per_chunk: int = 1200) -> str:
@@ -38,21 +43,51 @@ def build_evidence_context(query: str, chunks: list[Any], max_chars_per_chunk: i
 def build_llm_prompt(query: str, chunks: list[Any], response_language: str = "ru") -> str:
     """Create a grounded prompt with strict anti-hallucination rules."""
     context = build_evidence_context(query, chunks)
-    language_instruction = (
-        "Write the entire answer in English."
-        if response_language == "en"
-        else "Пиши весь ответ на русском языке."
+
+    if response_language == "en":
+        language_instruction = "Write the entire answer in English."
+        glossary = (
+            "For the Java library project, describe loan as a book loan "
+            "and recordLoan as recording a book loan."
+        )
+
+        return f"""You are CodeLens, an assistant for explaining source code.
+
+Use ONLY the retrieved code chunks below. Do not invent files, functions,
+endpoints, classes, methods or behavior. If the information is insufficient,
+explicitly say so.
+
+{language_instruction}
+Do not translate file names, chunk IDs, class names or method names.
+{glossary}
+
+User question:
+{query}
+
+Retrieved code chunks:
+{context}
+
+Answer structure:
+1. Brief direct answer.
+2. Relevant code chunks (list chunk IDs without translation).
+3. Explain relationships between chunks if necessary.
+"""
+
+    language_instruction = "Пиши весь ответ на русском языке."
+    glossary = (
+        "Для библиотечного Java-проекта переводи loan как «выдача книги», "
+        "а recordLoan как «запись о выдаче книги»."
     )
-    java_glossary = (
-        "For the Java library project, describe loan as a book loan and recordLoan as recording a book loan."
-        if response_language == "en"
-        else "Для библиотечного Java-проекта переводи loan как «выдача книги», а recordLoan как «запись о выдаче книги»."
-    )
+
     return f"""Ты CodeLens, помощник для объяснения исходного кода.
-Используй ТОЛЬКО найденные фрагменты ниже. Не выдумывай файлы, функции, endpoints
-или поведение. Если данных недостаточно, прямо скажи об этом.
-{language_instruction} Не переводи имена файлов, chunk id, классов и
-методов. {java_glossary}
+
+Используй ТОЛЬКО найденные фрагменты ниже. Не выдумывай файлы, функции,
+endpoints, классы, методы или поведение. Если данных недостаточно,
+прямо скажи об этом.
+
+{language_instruction}
+Не переводи имена файлов, chunk ID, классов и методов.
+{glossary}
 
 Вопрос пользователя:
 {query}
@@ -62,9 +97,10 @@ def build_llm_prompt(query: str, chunks: list[Any], response_language: str = "ru
 
 Структура ответа:
 1. Краткий прямой ответ.
-2. Фрагменты кода: укажи релевантные chunk id без перевода.
+2. Релевантные фрагменты кода (укажи chunk ID без перевода).
 3. При необходимости объясни связь между фрагментами.
 """
+
 
 
 def generate_extractive_answer(
@@ -187,7 +223,7 @@ def _request_ollama(
             "model": model,
             "prompt": prompt,
             "stream": False,
-            "keep_alive": "10m",
+            "keep_alive": profile["keep_alive"],
             "options": {
                 "temperature": 0.1,
                 "num_ctx": profile["num_ctx"],
